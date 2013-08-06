@@ -33,7 +33,7 @@ public class SynchroniserCli {
 	private static Aether aether;
 	private static Options options;
 	private static CommandLine cmd;
-	private static final int BATCH = 25;
+	private static final int BATCH = 10;
 	private static List<Option> required = new ArrayList<Option>();
 	
 	public static void main(String[] args) throws ExistingLuceneIndexMismatchException, IllegalArgumentException, ComponentLookupException, PlexusContainerException, IOException {
@@ -78,6 +78,14 @@ public class SynchroniserCli {
 				
 		Iterator<Dependency> deps;
 		MavenIndexSearcher searcher = new MavenIndexSearcher(aether);
+		
+		if(cmd.hasOption("types")){
+			for(String type: cmd.getOptionValue("types").split("\\s*,\\s*")){
+				searcher.addType(type);
+			}
+		}else{
+			searcher.addType("jar");
+		}
 		
 		if(cmd.hasOption("file")){
 			System.out.println("Resolving dependencies from file: " + cmd.getOptionValue("file"));
@@ -136,6 +144,7 @@ public class SynchroniserCli {
 		Option max = OptionBuilder.withArgName("int").hasArg().withLongOpt("max").withDescription("maximum dependencies to resolve").create("M");
 		Option mirrors = OptionBuilder.withArgName("[mirror[,]]").hasArg().withLongOpt("mirrors").withDescription("comma seperated list of mirrors to use").create("m");
 		Option file = OptionBuilder.withArgName("path").hasArg().withLongOpt("file").withDescription("resolve GAV dependencies from this file").create("f");
+		Option types = OptionBuilder.withArgName("[type[,]]").hasArg().withLongOpt("types").withDescription("comma seperated list of types for index search").create("t");
 		
 		Options options = new Options();
 		options.addOption(help);
@@ -144,6 +153,7 @@ public class SynchroniserCli {
 		options.addOption(max);
 		options.addOption(mirrors);
 		options.addOption(file);
+		options.addOption(types);
 		
 		return options;
 	}

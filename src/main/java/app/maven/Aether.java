@@ -114,10 +114,8 @@ public class Aether {
 				deps = resolveDependencies(deps);
 			} catch (DependencyCollectionException e) {
 				System.out.println("Problem collecting dependency: " + e.getMessage());
-				//failedDownloads.add(Helper.calculateGav(e.getResult().getRoot().getArtifact()));
 			} catch (DependencyResolutionException e) {
 				System.out.println("Problem resolving dependency: " + e.getMessage());
-				//failedDownloads.add(Helper.calculateGav(e.getResult().getRoot().getArtifact()));
 			}
     	}
     	System.out.println("Finished resolving dependencies");
@@ -141,18 +139,19 @@ public class Aether {
 	        while(deps.hasNext()){
 	        	if(!(hasMax() && downloaded >= getMax())){
 	        		Dependency dep = deps.next();
-		        	if(! failedDownloads.contains(Helper.calculateGav(dep.getArtifact()))){        	
-			        	collectRequest.addDependency(dep);
-			        	deps.remove();
-			        	downloaded++;
-		        	}
+		        	collectRequest.addDependency(dep);
+			        deps.remove();
+			        DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
+			    	DependencyRequest dependencyRequest = new DependencyRequest( node, null );
+			        system.resolveDependencies( session, dependencyRequest  );
+			        downloaded++;
 	        	}
 	        }
 	        
 	       	//system.collectDependencies(session, collectRequest);
-	    	DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
-	        DependencyRequest dependencyRequest = new DependencyRequest( node, null );
-	        system.resolveDependencies( session, dependencyRequest  );
+	    	//DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
+	    	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
+	        //system.resolveDependencies( session, dependencyRequest  );
 		}
         return deps;
 	}

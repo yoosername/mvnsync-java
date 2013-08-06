@@ -24,6 +24,7 @@ import org.apache.maven.index.updater.ResourceFetcher;
 import org.apache.maven.index.updater.WagonHelper;
 import org.apache.maven.wagon.Wagon;
 import org.apache.maven.wagon.events.TransferListener;
+import org.apache.maven.wagon.providers.http.HttpWagon;
 import org.codehaus.plexus.DefaultPlexusContainer;
 import org.codehaus.plexus.PlexusContainer;
 import org.codehaus.plexus.PlexusContainerException;
@@ -37,13 +38,17 @@ import app.maven.utils.Helper;
 
 public class MavenIndexSearcher {
 	
-	private List<String> types;
+	private List<String> types = new ArrayList<String>();
 	private PlexusContainer plexusContainer;
 	private IndexingContext context;
 	private Aether aether;
+	private List<String> tried = new ArrayList<String>();
+	
+	public void addType(String type){
+		this.types.add(type);
+	}
 	
 	public MavenIndexSearcher(Aether aether) throws ExistingLuceneIndexMismatchException, IllegalArgumentException, IOException, ComponentLookupException, PlexusContainerException{
-		types = Arrays.asList("jar");
 		this.aether = aether;
 		
 		plexusContainer = new DefaultPlexusContainer();
@@ -72,12 +77,9 @@ public class MavenIndexSearcher {
 	}
 	
 	public void updateIndex() throws PlexusContainerException, ComponentLookupException, IOException{
-		
-		//IndexUpdater indexUpdater = new DefaultIndexUpdater();
-		//Wagon httpWagon = new HttpWagon();		
-		
 		IndexUpdater indexUpdater = plexusContainer.lookup( IndexUpdater.class );
-		Wagon httpWagon = plexusContainer.lookup( Wagon.class, "http" );
+		//plexusContainer.lookup( Wagon.class, "http" ); // didnt work: component lookup failure
+		Wagon httpWagon = new HttpWagon();
 			
         System.out.println( "Updating Index..." );
         System.out.println( "This might take a while on first run, so please be patient!" );
@@ -128,11 +130,15 @@ public class MavenIndexSearcher {
 							if(!localFile.exists()){
 								String gav = Helper.calculateGav(ai);
 								if(gav != null){
-									Artifact art = new DefaultArtifact(gav);
-									Dependency dep = new Dependency(art, "compile");
-									deps.add(dep);
-									if((amount > 0) && ++added >= amount){
-										break;
+									if(!tried.contains(gav)){
+										Artifact art = new DefaultArtifact(gav);
+										Dependency dep = new Dependency(art, "compile");
+										System.out.println(art);
+										deps.add(dep);
+										tried.add(gav);
+										if((amount > 0) && ++added >= amount){
+											break;
+										}
 									}
 								}
 							}
@@ -141,7 +147,7 @@ public class MavenIndexSearcher {
 				}
 			}
 		}
-		System.out.println("Resolving next "+amount+" dependencies");
+		System.out.println("Resolving "+amount+" dependencies");
 		Iterator<Dependency> i = deps.iterator();
 		return i;
 	}
