@@ -1,13 +1,16 @@
 package app.maven;
 
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Scanner;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.search.IndexSearcher;
@@ -36,7 +39,7 @@ import org.eclipse.aether.graph.Dependency;
 import app.maven.listeners.ConsoleTransferListener;
 import app.maven.utils.Helper;
 
-public class MavenIndexSearcher {
+public class MavenSearcher {
 	
 	private List<String> types = new ArrayList<String>();
 	private PlexusContainer plexusContainer;
@@ -48,9 +51,11 @@ public class MavenIndexSearcher {
 		this.types.add(type);
 	}
 	
-	public MavenIndexSearcher(Aether aether) throws ExistingLuceneIndexMismatchException, IllegalArgumentException, IOException, ComponentLookupException, PlexusContainerException{
-		this.aether = aether;
-		
+	public MavenSearcher(Aether aether){
+		this.aether = aether;        
+	}
+	
+	public void setupIndexer()throws ExistingLuceneIndexMismatchException, IllegalArgumentException, IOException, ComponentLookupException, PlexusContainerException{
 		plexusContainer = new DefaultPlexusContainer();
 		Indexer indexer = plexusContainer.lookup( Indexer.class );
         
@@ -69,7 +74,6 @@ public class MavenIndexSearcher {
             "maven-context", "maven", mavenLocalCache, mavenIndexDir,
             aether.getRemoteRepository().getUrl().toString(), null, true, true, indexers
         );
-        
 	}
 	
 	public IndexingContext getIndexingContext(){
@@ -133,7 +137,7 @@ public class MavenIndexSearcher {
 									if(!tried.contains(gav)){
 										Artifact art = new DefaultArtifact(gav);
 										Dependency dep = new Dependency(art, "compile");
-										System.out.println(art);
+										System.out.println(art + " -> " + localFile.getPath());
 										deps.add(dep);
 										tried.add(gav);
 										if((amount > 0) && ++added >= amount){
@@ -150,5 +154,132 @@ public class MavenIndexSearcher {
 		System.out.println("Resolving "+amount+" dependencies");
 		Iterator<Dependency> i = deps.iterator();
 		return i;
+	}
+	
+	public Iterator<Dependency> getDependenciesFromFile(File file,int amount){
+		Scanner sc = null;
+		List<Dependency> deps = null;
+		File depFile = file;
+		int added = 0;
+		
+		if(depFile.exists() && depFile.isFile()){
+			try {
+				sc = new Scanner(depFile);
+				deps = new ArrayList<Dependency>();
+				while (sc.hasNextLine()) {
+					String gav = sc.nextLine();
+					if(gav != null && ! "".equals(gav)){
+						File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(gav));
+						if(!localFile.exists()){
+							if(gav != null){
+								if(!tried.contains(gav)){
+									Artifact art = new DefaultArtifact(gav);
+									Dependency dep = new Dependency(art, "compile");
+									System.out.println(art + " -> " + localFile.getPath());
+									deps.add(dep);
+									tried.add(gav);
+									if((amount > 0) && ++added >= amount){
+										break;
+									}
+								}
+							}
+						}
+					}
+				}
+			} catch (FileNotFoundException e) {
+				System.out.println("GAV file not found: " + e.getMessage());
+			} finally{
+				sc.close();
+			}
+		}
+		Iterator<Dependency> i = deps.iterator();
+		return i;
+	}
+
+	public void report() throws IOException {
+		System.out.println("Reporting on search of types: " + types);
+		IndexSearcher searcher = context.acquireIndexSearcher();
+		IndexReader ir = searcher.getIndexReader();
+		int artifactsInIndex = 0;
+		int artifactsLocally = 0;
+		
+		for ( int i = 0; i < ir.maxDoc(); i++ ){
+			if ( !ir.isDeleted( i ) ){
+				Document doc = null;
+				try {
+					doc = ir.document( i );
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+				if(doc != null){
+					ArtifactInfo ai = IndexUtils.constructArtifactInfo( doc, context );
+					if( ai != null ){
+						if( types.contains(ai.fextension) ){
+							artifactsInIndex++;
+							File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(ai));
+							if(localFile.exists()){
+								artifactsLocally++;
+							}
+						}
+					}
+				}
+			}
+		}
+		
+		System.out.println("Indexed: " + artifactsInIndex);
+		System.out.println("Local: " + artifactsLocally);
+	}
+
+	public void createBatchFiles(int amount) throws IOException {
+		System.out.println("Creating " + amount + " batch files from indexed content");
+		IndexSearcher searcher = context.acquireIndexSearcher();
+		IndexReader ir = searcher.getIndexReader();
+		List<String> gavs = new ArrayList<String>();
+				
+		for ( int i = 0; i < ir.maxDoc(); i++ ){
+			if ( !ir.isDeleted( i ) ){
+				Document doc = null;
+				try {
+					doc = ir.document( i );
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+				if(doc != null){
+					ArtifactInfo ai = IndexUtils.constructArtifactInfo( doc, context );
+					if( ai != null ){
+						if( types.contains(ai.fextension) ){
+							File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(ai));
+							if(!localFile.exists()){
+								gavs.add(Helper.calculateGav(ai));
+							}
+						}
+					}
+				}
+			}
+		}
+		
+		Iterator<String> gavIterator = gavs.iterator();
+		File batchDir = new File(aether.getLocalRepository().getBasedir(),".batches");
+		int amountPerFile = (gavs.size() / amount) + 1;
+		System.out.println("Size per file is: " + amountPerFile);
+		int added = 0;
+		int batched = 1;
+		FileWriter writer = new FileWriter(new File(batchDir,"batch_"+batched+".txt"));
+		while(gavIterator.hasNext()){
+			String gav = gavIterator.next();
+			if(gav != null){
+				writer.append(gav + "\n");
+				if(++added >= amountPerFile){
+					writer.flush();
+				    writer.close();
+				    writer = new FileWriter(new File(batchDir,"batch_"+(++batched)+".txt"));
+					added = 0;
+				}
+			}
+		}
+		writer.flush();
+	    writer.close();
+		System.out.println("Added " + gavs.size() + " GAVs each to " + batched + " batch files");
+		System.out.println("Batch files saved to: " + batchDir.getPath());		
 	}
 }

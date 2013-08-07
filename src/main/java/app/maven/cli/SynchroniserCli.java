@@ -1,13 +1,11 @@
 package app.maven.cli;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Scanner;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -20,20 +18,17 @@ import org.apache.commons.cli.ParseException;
 import org.apache.maven.index.context.ExistingLuceneIndexMismatchException;
 import org.codehaus.plexus.PlexusContainerException;
 import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.graph.Dependency;
 
 import app.maven.Aether;
-import app.maven.MavenIndexSearcher;
-import app.maven.utils.Helper;
+import app.maven.MavenSearcher;
 
 public class SynchroniserCli {
 
 	private static Aether aether;
 	private static Options options;
 	private static CommandLine cmd;
-	private static final int BATCH = 10;
+	private static final int BATCH = 50; //50 = best tested download rate out of 15,24,48,50,100
 	private static List<Option> required = new ArrayList<Option>();
 	
 	public static void main(String[] args) throws ExistingLuceneIndexMismatchException, IllegalArgumentException, ComponentLookupException, PlexusContainerException, IOException {
@@ -77,7 +72,7 @@ public class SynchroniserCli {
 		}		
 				
 		Iterator<Dependency> deps;
-		MavenIndexSearcher searcher = new MavenIndexSearcher(aether);
+		MavenSearcher searcher = new MavenSearcher(aether);
 		
 		if(cmd.hasOption("types")){
 			for(String type: cmd.getOptionValue("types").split("\\s*,\\s*")){
@@ -87,50 +82,53 @@ public class SynchroniserCli {
 			searcher.addType("jar");
 		}
 		
-		if(cmd.hasOption("file")){
-			System.out.println("Resolving dependencies from file: " + cmd.getOptionValue("file"));
-			deps = getDependenciesFromFile();
-			aether.resolveAndRetry(deps);
-		}else{
-			searcher.updateIndex();
-			boolean moreToDo = true;
-			while(moreToDo){
-				deps = searcher.getDependenciesFromIndex(BATCH);
-				if(!deps.hasNext()){
-					moreToDo = false;
+		if(cmd.hasOption("list")){
+			searcher.setupIndexer();
+			searcher.report();
+		}else if(cmd.hasOption("createBatchFiles")){
+			String val = cmd.getOptionValue("createBatchFiles");
+			if(val != null){
+				int num = Integer.parseInt(val);
+				if(num > 0){
+					searcher.setupIndexer();
+					searcher.updateIndex();
+					searcher.createBatchFiles(Integer.parseInt(cmd.getOptionValue("createBatchFiles")));
 				}else{
-					aether.resolveAndRetry(deps);
+					System.out.println("Must be a number greater than 0");
+					dieWithUsage();
+				}
+			}else{
+				System.out.println("Missing argument: batch number");
+				dieWithUsage();
+			}
+		}else{
+			if(cmd.hasOption("file")){
+				System.out.println("Resolving dependencies from file: " + cmd.getOptionValue("file"));
+				File file = new File(cmd.getOptionValue("file"));
+				boolean moreToDo = true;
+				while(moreToDo){
+					deps = searcher.getDependenciesFromFile(file, BATCH);
+					if(!deps.hasNext()){
+						moreToDo = false;
+					}else{
+						aether.resolveAndRetry(deps);
+					}
+				}
+			}else{
+				searcher.setupIndexer();
+				searcher.updateIndex();
+				boolean moreToDo = true;
+				while(moreToDo){
+					deps = searcher.getDependenciesFromIndex(BATCH);
+					if(!deps.hasNext()){
+						moreToDo = false;
+					}else{
+						aether.resolveAndRetry(deps);
+					}
 				}
 			}
 		}
 		System.out.println("Finished");
-	}
-	
-	private static Iterator<Dependency> getDependenciesFromFile(){
-		Scanner sc = null;
-		List<Dependency> deps = null;
-		File depFile = new File(cmd.getOptionValue("file"));
-		if(depFile.exists() && depFile.isFile()){
-			try {
-				sc = new Scanner(depFile);
-				deps = new ArrayList<Dependency>();
-				while (sc.hasNextLine()) {
-					String gav = sc.nextLine();
-					File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(gav));
-					if(!localFile.exists()){
-						Artifact art = new DefaultArtifact(gav);
-						Dependency dep = new Dependency(art, "compile");
-						deps.add(dep);
-					}
-				}
-			} catch (FileNotFoundException e) {
-				System.out.println("GAV file not found: " + e.getMessage());
-			} finally{
-				sc.close();
-			}
-		}
-		Iterator<Dependency> i = deps.iterator();
-		return i;
 	}
 	
 	@SuppressWarnings("static-access")
@@ -145,6 +143,9 @@ public class SynchroniserCli {
 		Option mirrors = OptionBuilder.withArgName("[mirror[,]]").hasArg().withLongOpt("mirrors").withDescription("comma seperated list of mirrors to use").create("m");
 		Option file = OptionBuilder.withArgName("path").hasArg().withLongOpt("file").withDescription("resolve GAV dependencies from this file").create("f");
 		Option types = OptionBuilder.withArgName("[type[,]]").hasArg().withLongOpt("types").withDescription("comma seperated list of types for index search").create("t");
+		Option createBatches = OptionBuilder.withArgName("int").hasArg().withLongOpt("createBatchFiles").withDescription("create specified amount of gav batch files from index").create("c");
+		Option list = new Option( "L", "print download summary and quit");
+		list.setLongOpt("list");
 		
 		Options options = new Options();
 		options.addOption(help);
@@ -154,6 +155,8 @@ public class SynchroniserCli {
 		options.addOption(mirrors);
 		options.addOption(file);
 		options.addOption(types);
+		options.addOption(list);
+		options.addOption(createBatches);
 		
 		return options;
 	}

@@ -15,7 +15,6 @@ import org.eclipse.aether.collection.DependencyCollectionException;
 import org.eclipse.aether.connector.wagon.WagonProvider;
 import org.eclipse.aether.connector.wagon.WagonRepositoryConnectorFactory;
 import org.eclipse.aether.graph.Dependency;
-import org.eclipse.aether.graph.DependencyNode;
 import org.eclipse.aether.impl.DefaultServiceLocator;
 import org.eclipse.aether.repository.LocalRepository;
 import org.eclipse.aether.repository.RemoteRepository;
@@ -25,7 +24,6 @@ import org.eclipse.aether.spi.connector.RepositoryConnectorFactory;
 
 import app.maven.listeners.ConsoleRepositoryListener;
 import app.maven.providers.ManualWagonProvider;
-import app.maven.utils.Helper;
 
 public class Aether {
 	private RepositorySystem system;
@@ -141,13 +139,16 @@ public class Aether {
 	        		Dependency dep = deps.next();
 		        	collectRequest.addDependency(dep);
 			        deps.remove();
-			        DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
-			    	DependencyRequest dependencyRequest = new DependencyRequest( node, null );
-			        system.resolveDependencies( session, dependencyRequest  );
+			        //DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
+			    	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
 			        downloaded++;
 	        	}
 	        }
 	        
+	        // dont do the dependency graph, just add a batch of dependencies and then resolve them
+	        // and carry on to the next
+	        DependencyRequest dependencyRequest = new DependencyRequest( collectRequest, null );
+	        system.resolveDependencies( session, dependencyRequest  );
 	       	//system.collectDependencies(session, collectRequest);
 	    	//DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
 	    	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
