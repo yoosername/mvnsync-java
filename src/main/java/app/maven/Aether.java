@@ -10,6 +10,8 @@ import org.apache.maven.repository.internal.MavenRepositorySystemUtils;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.artifact.Artifact;
+import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.collection.CollectRequest;
 import org.eclipse.aether.collection.DependencyCollectionException;
 import org.eclipse.aether.connector.wagon.WagonProvider;
@@ -32,15 +34,47 @@ public class Aether {
 	private LocalRepository localRepository;
 	private List<RemoteRepository> mirrors = new ArrayList<RemoteRepository>();
 	private RemoteRepository remoteRepository;
+	private String groupId;
+	private String artifactId;
 	private int max;
 	private boolean hasMax = false;
-	private List<String> failedDownloads = new ArrayList<String>();
-	private int downloaded = 0;
+	private List<String> dependencies = new ArrayList<String>();
+	
+	public static final int COLLECT = 0;
+	public static final int RESOLVE = 1;
 	
 	public Aether(String local){
 		setLocalRepository(local);
+		groupId = "";
+		artifactId = "";		
 		newRepositorySystem();
 		newSession();	
+	}
+	
+	public void addDependency(String gav){
+		if(!dependencies.contains(gav)){
+			dependencies.add(gav);
+		}
+	}
+	
+	public Iterator<String> getDependenciesIterator(){
+		return dependencies.iterator();
+	}
+	
+	public String getGroupId(){
+		return groupId;
+	}
+	
+	public void setGroupId(String groupId){
+		this.groupId = groupId;
+	}
+	
+	public String getArtifactId(){
+		return artifactId;
+	}
+	
+	public void setArtifactId(String artifactId){
+		this.artifactId = artifactId;
 	}
 	
 	public List<RemoteRepository> mirrors(){
@@ -106,54 +140,49 @@ public class Aether {
         this.session = session;
     }
     
-    public void resolveAndRetry(Iterator<Dependency> deps){
-    	while(deps.hasNext()){
-    		try {
-				deps = resolveDependencies(deps);
-			} catch (DependencyCollectionException e) {
-				System.out.println("Problem collecting dependency: " + e.getMessage());
-			} catch (DependencyResolutionException e) {
-				System.out.println("Problem resolving dependency: " + e.getMessage());
-			}
-    	}
-    	System.out.println("Finished resolving dependencies");
-    	if(!failedDownloads.isEmpty()){
-    		System.out.println("The following dependencies failed:");
-    		for(String gav: failedDownloads){
-        		System.out.println(gav);
-        	}
-    	}	
+    public void resolve(int amount){
+    	resolve(amount, Aether.RESOLVE);
     }
     
-    public Iterator<Dependency> resolveDependencies(Iterator<Dependency> deps) throws DependencyCollectionException, DependencyResolutionException{
-		if(deps.hasNext()){
-	    	CollectRequest collectRequest = new CollectRequest();
-			collectRequest.addRepository(remoteRepository);
+    public void resolve(int amount, int perform){
+    	System.out.println("resolving "+amount+" dependencies");
+    	CollectRequest collectRequest = new CollectRequest();
+		collectRequest.addRepository(remoteRepository);
+		Iterator<String> deps = getDependenciesIterator();
 
-			for(RemoteRepository mirror: mirrors){
-				collectRequest.addRepository( mirror );
-			}
-			
-	        while(deps.hasNext()){
-	        	if(!(hasMax() && downloaded >= getMax())){
-	        		Dependency dep = deps.next();
-		        	collectRequest.addDependency(dep);
-			        deps.remove();
-			        //DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
-			    	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
-			        downloaded++;
-	        	}
-	        }
-	        
-	        // dont do the dependency graph, just add a batch of dependencies and then resolve them
-	        // and carry on to the next
-	        DependencyRequest dependencyRequest = new DependencyRequest( collectRequest, null );
-	        system.resolveDependencies( session, dependencyRequest  );
-	       	//system.collectDependencies(session, collectRequest);
-	    	//DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
-	    	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
-	        //system.resolveDependencies( session, dependencyRequest  );
+		for(RemoteRepository mirror: mirrors){
+			collectRequest.addRepository( mirror );
 		}
-        return deps;
+		
+        for(int i = 0;i<amount;i++){
+        	if(deps.hasNext()){
+        		String gav = deps.next();
+	    		Artifact art = new DefaultArtifact(gav);
+	        	Dependency dep = new Dependency(art,"compile");
+	        	collectRequest.addDependency(dep);
+		        deps.remove();
+        	}else{
+        		break;
+        	}
+        }
+        
+        DependencyRequest dependencyRequest = new DependencyRequest( collectRequest, null );
+        
+        if(perform == Aether.RESOLVE){
+	        //DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
+	    	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
+	        try {
+				system.resolveDependencies( session, dependencyRequest  );
+			} catch (DependencyResolutionException e) {
+				System.out.println("problem resolving dependencies: " + e.getMessage());
+			}
+        }else{
+        	try {
+				system.collectDependencies(session, collectRequest);
+			} catch (DependencyCollectionException e) {
+				System.out.println("problem collecting dependencies: " + e.getMessage());
+			}
+        }
 	}
+    
 }

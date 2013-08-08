@@ -1,10 +1,12 @@
 package app.maven.utils;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 
 import org.apache.maven.index.ArtifactInfo;
 import org.eclipse.aether.artifact.Artifact;
+import org.eclipse.aether.graph.Dependency;
 
 public class Helper {
 
@@ -26,7 +28,43 @@ public class Helper {
 		return gav;
 	}
 	
-	public static String calculateGav(String artifactId, String groupId, String version){
+	public static String calculateGav(File root, File file){
+		String path = file.getPath();
+		String base = root.getPath();
+		String relative = new File(base).toURI().relativize(new File(path).toURI()).getPath();
+		String str = relative.replace("\\","/");
+
+		try
+        {
+            String s = str.startsWith( "/" ) ? str.substring( 1 ) : str;
+            int vEndPos = s.lastIndexOf( '/' );
+            if ( vEndPos == -1 ){
+                return null;
+            }
+            int aEndPos = s.lastIndexOf( '/', vEndPos - 1 );
+            if ( aEndPos == -1 ){
+                return null;
+            }
+            int gEndPos = s.lastIndexOf( '/', aEndPos - 1 );
+            if ( gEndPos == -1 ){
+                return null;
+            }
+            String groupId = s.substring( 0, gEndPos ).replace( '/', '.' );
+            String artifactId = s.substring( gEndPos + 1, aEndPos );
+            String version = s.substring( aEndPos + 1, vEndPos );
+            return calculateGav(groupId,artifactId,version);
+        }
+        catch ( NumberFormatException e )
+        {
+            return null;
+        }
+        catch ( StringIndexOutOfBoundsException e )
+        {
+            return null;
+        }
+	}
+	
+	public static String calculateGav(String groupId, String artifactId, String version){
 		String gav = null;
 		if(
 			groupId != null &&
@@ -98,5 +136,26 @@ public class Helper {
 			path.append('.').append( "jar" ); //extension
 		}
 		return path.toString();
+	}
+
+	public static String calculatePath(Dependency dep) {
+		StringBuilder path = new StringBuilder( 128 );
+		Artifact art = dep.getArtifact();
+		path.append( art.getGroupId().replace( '.', '/' ) ).append( '/' );
+		path.append( art.getArtifactId() ).append( '/' );
+		path.append( art.getVersion() ).append( '/' );
+		path.append( art.getArtifactId() ).append( '-' ).append( art.getVersion() );
+		if ( art.getClassifier() != null && art.getClassifier().length() > 0 ){
+			path.append( '-' ).append( art.getClassifier() );
+		}
+		path.append( '.' ).append( art.getExtension() );
+		return path.toString();
+	}
+
+	public static String calculateGav(Dependency dep) {
+		if(dep != null){
+			return calculateGav(dep.getArtifact());
+		}
+		return null;
 	}
 }

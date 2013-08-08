@@ -18,7 +18,6 @@ import org.apache.commons.cli.ParseException;
 import org.apache.maven.index.context.ExistingLuceneIndexMismatchException;
 import org.codehaus.plexus.PlexusContainerException;
 import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
-import org.eclipse.aether.graph.Dependency;
 
 import app.maven.Aether;
 import app.maven.MavenSearcher;
@@ -60,6 +59,14 @@ public class SynchroniserCli {
 		aether = new Aether(cmd.getOptionValue("localRepository"));
 		aether.setRemoteRepository(cmd.getOptionValue("remoteRepository"));
 		
+		if(cmd.hasOption("groupId")){
+			aether.setGroupId(cmd.getOptionValue("groupId"));
+		}
+		
+		if(cmd.hasOption("artifactId")){
+			aether.setArtifactId(cmd.getOptionValue("artifactId"));
+		}
+		
 		if(cmd.hasOption("max")){
 			aether.setMax(Integer.parseInt(cmd.getOptionValue("max")));
 		}
@@ -71,7 +78,6 @@ public class SynchroniserCli {
 			}
 		}		
 				
-		Iterator<Dependency> deps;
 		MavenSearcher searcher = new MavenSearcher(aether);
 		
 		if(cmd.hasOption("types")){
@@ -85,6 +91,12 @@ public class SynchroniserCli {
 		if(cmd.hasOption("list")){
 			searcher.setupIndexer();
 			searcher.report();
+		}else if(cmd.hasOption("validate")){
+			searcher.loadDependenciesFromFileSystem();
+			Iterator<String> deps = aether.getDependenciesIterator();
+			while(deps.hasNext()){
+				aether.resolve(BATCH,Aether.COLLECT);
+			}
 		}else if(cmd.hasOption("createBatchFiles")){
 			String val = cmd.getOptionValue("createBatchFiles");
 			if(val != null){
@@ -103,29 +115,17 @@ public class SynchroniserCli {
 			}
 		}else{
 			if(cmd.hasOption("file")){
-				System.out.println("Resolving dependencies from file: " + cmd.getOptionValue("file"));
 				File file = new File(cmd.getOptionValue("file"));
-				boolean moreToDo = true;
-				while(moreToDo){
-					deps = searcher.getDependenciesFromFile(file, BATCH);
-					if(!deps.hasNext()){
-						moreToDo = false;
-					}else{
-						aether.resolveAndRetry(deps);
-					}
-				}
+				searcher.loadDependenciesFromFile(file);
 			}else{
 				searcher.setupIndexer();
 				searcher.updateIndex();
-				boolean moreToDo = true;
-				while(moreToDo){
-					deps = searcher.getDependenciesFromIndex(BATCH);
-					if(!deps.hasNext()){
-						moreToDo = false;
-					}else{
-						aether.resolveAndRetry(deps);
-					}
-				}
+				searcher.loadDependenciesFromIndex();
+			}
+			
+			Iterator<String> deps = aether.getDependenciesIterator();
+			while(deps.hasNext()){
+				aether.resolve(BATCH);
 			}
 		}
 		System.out.println("Finished");
@@ -144,6 +144,10 @@ public class SynchroniserCli {
 		Option file = OptionBuilder.withArgName("path").hasArg().withLongOpt("file").withDescription("resolve GAV dependencies from this file").create("f");
 		Option types = OptionBuilder.withArgName("[type[,]]").hasArg().withLongOpt("types").withDescription("comma seperated list of types for index search").create("t");
 		Option createBatches = OptionBuilder.withArgName("int").hasArg().withLongOpt("createBatchFiles").withDescription("create specified amount of gav batch files from index").create("c");
+		Option groupId = OptionBuilder.withArgName("string").hasArg().withLongOpt("groupId").withDescription("limit to artifacts with this groupId").create("G");
+		Option artifactId = OptionBuilder.withArgName("string").hasArg().withLongOpt("artifactId").withDescription("limit to artifacts with this artifactId").create("A");
+		Option validate = new Option( "v", "validate local dependencies only");
+		validate.setLongOpt("validate");
 		Option list = new Option( "L", "print download summary and quit");
 		list.setLongOpt("list");
 		
@@ -157,6 +161,9 @@ public class SynchroniserCli {
 		options.addOption(types);
 		options.addOption(list);
 		options.addOption(createBatches);
+		options.addOption(groupId);
+		options.addOption(artifactId);
+		options.addOption(validate);
 		
 		return options;
 	}

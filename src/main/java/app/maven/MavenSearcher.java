@@ -5,21 +5,28 @@ import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Scanner;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
 import org.apache.maven.index.ArtifactInfo;
 import org.apache.maven.index.Indexer;
+import org.apache.maven.index.IteratorSearchRequest;
+import org.apache.maven.index.IteratorSearchResponse;
+import org.apache.maven.index.MAVEN;
 import org.apache.maven.index.context.ExistingLuceneIndexMismatchException;
 import org.apache.maven.index.context.IndexCreator;
 import org.apache.maven.index.context.IndexUtils;
 import org.apache.maven.index.context.IndexingContext;
+import org.apache.maven.index.expr.SourcedSearchExpression;
 import org.apache.maven.index.updater.IndexUpdateRequest;
 import org.apache.maven.index.updater.IndexUpdateResult;
 import org.apache.maven.index.updater.IndexUpdater;
@@ -32,9 +39,6 @@ import org.codehaus.plexus.DefaultPlexusContainer;
 import org.codehaus.plexus.PlexusContainer;
 import org.codehaus.plexus.PlexusContainerException;
 import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.artifact.DefaultArtifact;
-import org.eclipse.aether.graph.Dependency;
 
 import app.maven.listeners.ConsoleTransferListener;
 import app.maven.utils.Helper;
@@ -45,7 +49,7 @@ public class MavenSearcher {
 	private PlexusContainer plexusContainer;
 	private IndexingContext context;
 	private Aether aether;
-	private List<String> tried = new ArrayList<String>();
+	private Indexer indexer;
 	
 	public void addType(String type){
 		this.types.add(type);
@@ -57,7 +61,7 @@ public class MavenSearcher {
 	
 	public void setupIndexer()throws ExistingLuceneIndexMismatchException, IllegalArgumentException, IOException, ComponentLookupException, PlexusContainerException{
 		plexusContainer = new DefaultPlexusContainer();
-		Indexer indexer = plexusContainer.lookup( Indexer.class );
+		indexer = plexusContainer.lookup( Indexer.class );
         
 		// Files where local cache is (if any) and Lucene Index should be located
         File mavenLocalCache = new File( aether.getLocalRepository().getBasedir(), ".remote-index/repo-cache" );
@@ -109,123 +113,128 @@ public class MavenSearcher {
         }
 	}
 
-	public Iterator<Dependency> getDependenciesFromIndex(int amount) throws IOException{
-		System.out.println("Building dependency list from remote index....");
-		List<Dependency> deps = new ArrayList<Dependency>();
-		IndexSearcher searcher = context.acquireIndexSearcher();
-		IndexReader ir = searcher.getIndexReader();
-		int added = 0;
-		
-		for ( int i = 0; i < ir.maxDoc(); i++ ){
-			if ( !ir.isDeleted( i ) ){
-				Document doc = null;
-				try {
-					doc = ir.document( i );
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-
-				if(doc != null){
-					ArtifactInfo ai = IndexUtils.constructArtifactInfo( doc, context );
-					
-					if( ai != null ){
-						if( types.contains(ai.fextension) ){
-							File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(ai));
-							if(!localFile.exists()){
-								String gav = Helper.calculateGav(ai);
-								if(gav != null){
-									if(!tried.contains(gav)){
-										Artifact art = new DefaultArtifact(gav);
-										Dependency dep = new Dependency(art, "compile");
-										System.out.println(art + " -> " + localFile.getPath());
-										deps.add(dep);
-										tried.add(gav);
-										if((amount > 0) && ++added >= amount){
-											break;
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		System.out.println("Resolving "+amount+" dependencies");
-		Iterator<Dependency> i = deps.iterator();
-		return i;
-	}
-	
-	public Iterator<Dependency> getDependenciesFromFile(File file,int amount){
+	public void loadDependenciesFromFile(File file){
+		System.out.println("Resolving dependencies from file: " + file.getPath());
 		Scanner sc = null;
-		List<Dependency> deps = null;
 		File depFile = file;
-		int added = 0;
 		
 		if(depFile.exists() && depFile.isFile()){
 			try {
 				sc = new Scanner(depFile);
-				deps = new ArrayList<Dependency>();
 				while (sc.hasNextLine()) {
 					String gav = sc.nextLine();
 					if(gav != null && ! "".equals(gav)){
-						File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(gav));
-						if(!localFile.exists()){
-							if(gav != null){
-								if(!tried.contains(gav)){
-									Artifact art = new DefaultArtifact(gav);
-									Dependency dep = new Dependency(art, "compile");
-									System.out.println(art + " -> " + localFile.getPath());
-									deps.add(dep);
-									tried.add(gav);
-									if((amount > 0) && ++added >= amount){
-										break;
-									}
-								}
-							}
-						}
+						aether.addDependency(gav);
 					}
 				}
 			} catch (FileNotFoundException e) {
 				System.out.println("GAV file not found: " + e.getMessage());
 			} finally{
 				sc.close();
+				System.out.println("file closed");
 			}
 		}
-		Iterator<Dependency> i = deps.iterator();
-		return i;
 	}
+	
+	public void loadDependenciesFromIndex() throws IOException{
+		System.out.println("Searching index for artifacts of type(s): " + types);
+		
+        // construct the query for known GA
+		final BooleanQuery query = new BooleanQuery();
+		
+		if(!aether.getGroupId().isEmpty()){
+	        Query groupIdQ = indexer.constructQuery( MAVEN.GROUP_ID, new SourcedSearchExpression( aether.getGroupId() ) );
+	        query.add( groupIdQ, Occur.MUST );
+	        System.out.println("with groupId: " + aether.getGroupId());
+		}
+		
+		if(!aether.getArtifactId().isEmpty()){
+	        Query artifactIdQ = indexer.constructQuery( MAVEN.ARTIFACT_ID, new SourcedSearchExpression( aether.getArtifactId() ) );
+	        query.add( artifactIdQ, Occur.MUST );
+	        System.out.println("with artifactId: " + aether.getArtifactId());
+		}
 
+		for(String type: types){
+			query.add( indexer.constructQuery( MAVEN.PACKAGING, new SourcedSearchExpression( type ) ), Occur.MUST );
+		}
+		
+		IteratorSearchRequest request = new IteratorSearchRequest( query, Collections.singletonList( context ) );
+	    IteratorSearchResponse response = indexer.searchIterator( request );
+	    
+	    System.out.println("start loop");
+        for ( ArtifactInfo ai : response )
+        {
+        	if(ai != null){
+        		String gav = Helper.calculateGav(ai);
+				if(gav != null){
+					aether.addDependency(gav);
+				}
+        	}
+        }
+        
+        indexer.closeIndexingContext( context, false );	
+        System.out.println("index closed");
+	}
+	
+	public void loadDependenciesFromFileSystem(){
+		System.out.println("Searching " + aether.getLocalRepository().getBasedir() + " for artifacts");
+		loadDependenciesFromFileSystem(aether.getLocalRepository().getBasedir());
+	}
+	
+    public void loadDependenciesFromFileSystem(File file){
+    	if(file.isFile()){
+        	String gav = Helper.calculateGav(aether.getLocalRepository().getBasedir(),file);
+        	if(gav !=null){
+        		aether.addDependency(gav);
+        	}
+        }else if (file.isDirectory()) {
+          File[] listOfFiles = file.listFiles();
+          if(listOfFiles!=null) {
+            for(int i = 0; i < listOfFiles.length; i++){
+            	loadDependenciesFromFileSystem(listOfFiles[i]);
+            }
+          }
+        }
+    }
+	
 	public void report() throws IOException {
 		System.out.println("Reporting on search of types: " + types);
-		IndexSearcher searcher = context.acquireIndexSearcher();
-		IndexReader ir = searcher.getIndexReader();
 		int artifactsInIndex = 0;
 		int artifactsLocally = 0;
 		
-		for ( int i = 0; i < ir.maxDoc(); i++ ){
-			if ( !ir.isDeleted( i ) ){
-				Document doc = null;
-				try {
-					doc = ir.document( i );
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-				if(doc != null){
-					ArtifactInfo ai = IndexUtils.constructArtifactInfo( doc, context );
-					if( ai != null ){
-						if( types.contains(ai.fextension) ){
-							artifactsInIndex++;
-							File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(ai));
-							if(localFile.exists()){
-								artifactsLocally++;
-							}
-						}
-					}
-				}
-			}
+		final BooleanQuery query = new BooleanQuery();
+		
+		if(!aether.getGroupId().isEmpty()){
+	        Query groupIdQ = indexer.constructQuery( MAVEN.GROUP_ID, new SourcedSearchExpression( aether.getGroupId() ) );
+	        query.add( groupIdQ, Occur.MUST );
+	        System.out.println("with groupId: " + aether.getGroupId());
 		}
 		
+		if(!aether.getArtifactId().isEmpty()){
+	        Query artifactIdQ = indexer.constructQuery( MAVEN.ARTIFACT_ID, new SourcedSearchExpression( aether.getArtifactId() ) );
+	        query.add( artifactIdQ, Occur.MUST );
+	        System.out.println("with artifactId: " + aether.getArtifactId());
+		}
+
+		for(String type: types){
+			query.add( indexer.constructQuery( MAVEN.PACKAGING, new SourcedSearchExpression( type ) ), Occur.MUST );
+		}
+		
+		IteratorSearchRequest request = new IteratorSearchRequest( query, Collections.singletonList( context ) );
+	    IteratorSearchResponse response = indexer.searchIterator( request );
+	    
+        for ( ArtifactInfo ai : response )
+        {
+        	if(ai != null){
+				artifactsInIndex++;
+				File localFile = new File(aether.getLocalRepository().getBasedir(),Helper.calculatePath(ai));
+				if(localFile.exists()){
+					artifactsLocally++;
+				}
+        	}
+        }
+        
+        indexer.closeIndexingContext( context, false );
 		System.out.println("Indexed: " + artifactsInIndex);
 		System.out.println("Local: " + artifactsLocally);
 	}
