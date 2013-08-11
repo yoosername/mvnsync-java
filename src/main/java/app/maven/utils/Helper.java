@@ -158,4 +158,61 @@ public class Helper {
 		}
 		return null;
 	}
+
+	
+	public static ArtifactInfo buildArtifactInfo(File root, File file) {
+		String path = file.getPath();
+		String base = root.getPath();
+		String relative = new File(base).toURI().relativize(new File(path).toURI()).getPath();
+		String str = relative.replace("\\","/");
+		ArtifactInfo ai = null;
+		try
+        {
+            String s = str.startsWith( "/" ) ? str.substring( 1 ) : str;
+            int vEndPos = s.lastIndexOf( '/' );
+            if ( vEndPos == -1 ){
+                return null;
+            }
+            int aEndPos = s.lastIndexOf( '/', vEndPos - 1 );
+            if ( aEndPos == -1 ){
+                return null;
+            }
+            int gEndPos = s.lastIndexOf( '/', aEndPos - 1 );
+            if ( gEndPos == -1 ){
+                return null;
+            }
+            ai = new ArtifactInfo();
+            ai.groupId = s.substring( 0, gEndPos ).replace( '/', '.' );
+            ai.artifactId = s.substring( gEndPos + 1, aEndPos );
+            ai.version = s.substring( aEndPos + 1, vEndPos );
+            ai.fextension = "jar";
+            ai.path = relative;
+            ai.fname = file.getName();
+            return ai;
+        }
+        catch ( NumberFormatException e )
+        {
+            return null;
+        }
+        catch ( StringIndexOutOfBoundsException e )
+        {
+            return null;
+        }
+	}
+
+	public static ArtifactInfo buildArtifactInfo(String gav) {
+		ArtifactInfo ai = null;
+		try{
+			ai = new ArtifactInfo();
+			String[] parts = gav.split(":");
+			ai.groupId = parts[0];
+			ai.artifactId = parts[1];
+			ai.version = parts[2];
+			ai.fextension = "jar";
+			return ai;
+		}catch(Exception e){
+			return null;
+		}
+		
+	}
 }

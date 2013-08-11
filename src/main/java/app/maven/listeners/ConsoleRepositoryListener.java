@@ -31,11 +31,11 @@ public class ConsoleRepositoryListener extends AbstractRepositoryListener
     }
 
     public void artifactDownloading(RepositoryEvent event) {
-        out.println("downloading " + event.getArtifact());
+        out.println("downloading " + event.getArtifact() + " : " + event.getRepository());
     }
 
     public void artifactDownloaded(RepositoryEvent event) {
-        out.println("downloaded " + event.getArtifact());
+        out.println("downloaded " + event.getArtifact() + " : " + event.getRepository());
     }
 
     public void metadataInvalid(RepositoryEvent event) {

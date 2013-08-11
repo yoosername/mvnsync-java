@@ -15,6 +15,8 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.OptionBuilder;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.apache.maven.index.ArtifactInfo;
+import org.apache.maven.index.IteratorResultSet;
 import org.apache.maven.index.context.ExistingLuceneIndexMismatchException;
 import org.codehaus.plexus.PlexusContainerException;
 import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
@@ -27,7 +29,6 @@ public class SynchroniserCli {
 	private static Aether aether;
 	private static Options options;
 	private static CommandLine cmd;
-	private static final int BATCH = 50; //50 = best tested download rate out of 15,24,48,50,100
 	private static List<Option> required = new ArrayList<Option>();
 	
 	public static void main(String[] args) throws ExistingLuceneIndexMismatchException, IllegalArgumentException, ComponentLookupException, PlexusContainerException, IOException {
@@ -88,15 +89,25 @@ public class SynchroniserCli {
 			searcher.addType("jar");
 		}
 		
+		if(cmd.hasOption("maxThreads")){
+			aether.setMaxThreads(Integer.parseInt(cmd.getOptionValue("maxThreads")));
+		}
+		
 		if(cmd.hasOption("list")){
 			searcher.setupIndexer();
-			searcher.report();
+			searcher.report(searcher.loadDependenciesFromIndex());
+			searcher.closeIndex();
 		}else if(cmd.hasOption("validate")){
-			searcher.loadDependenciesFromFileSystem();
-			Iterator<String> deps = aether.getDependenciesIterator();
-			while(deps.hasNext()){
-				aether.resolve(BATCH,Aether.COLLECT);
-			}
+			aether.setMethod(Aether.COLLECT);
+			Iterator<ArtifactInfo> deps = searcher.loadDependenciesFromFileSystem().iterator();
+			aether.resolve(deps);
+		}else if(cmd.hasOption("direct")){
+			aether.setMethod(Aether.DIRECT);
+			searcher.setupIndexer();
+			searcher.updateIndex();
+			IteratorResultSet results = searcher.loadDependenciesFromIndex();
+			aether.directDownload(results);
+			searcher.closeIndex();
 		}else if(cmd.hasOption("createBatchFiles")){
 			String val = cmd.getOptionValue("createBatchFiles");
 			if(val != null){
@@ -104,7 +115,9 @@ public class SynchroniserCli {
 				if(num > 0){
 					searcher.setupIndexer();
 					searcher.updateIndex();
-					searcher.createBatchFiles(Integer.parseInt(cmd.getOptionValue("createBatchFiles")));
+					IteratorResultSet results = searcher.loadDependenciesFromIndex();
+					searcher.createBatchFiles(results,Integer.parseInt(cmd.getOptionValue("createBatchFiles")));
+					searcher.closeIndex();
 				}else{
 					System.out.println("Must be a number greater than 0");
 					dieWithUsage();
@@ -113,20 +126,16 @@ public class SynchroniserCli {
 				System.out.println("Missing argument: batch number");
 				dieWithUsage();
 			}
-		}else{
-			if(cmd.hasOption("file")){
+		}else if(cmd.hasOption("file")){
 				File file = new File(cmd.getOptionValue("file"));
-				searcher.loadDependenciesFromFile(file);
-			}else{
-				searcher.setupIndexer();
-				searcher.updateIndex();
-				searcher.loadDependenciesFromIndex();
-			}
-			
-			Iterator<String> deps = aether.getDependenciesIterator();
-			while(deps.hasNext()){
-				aether.resolve(BATCH);
-			}
+				Iterator<ArtifactInfo> it = searcher.loadDependenciesFromFile(file);
+				aether.resolve(it);
+		}else{
+			searcher.setupIndexer();
+			searcher.updateIndex();
+			IteratorResultSet it = searcher.loadDependenciesFromIndex();
+			aether.resolve(it);
+			searcher.closeIndex();
 		}
 		System.out.println("Finished");
 	}
@@ -146,6 +155,9 @@ public class SynchroniserCli {
 		Option createBatches = OptionBuilder.withArgName("int").hasArg().withLongOpt("createBatchFiles").withDescription("create specified amount of gav batch files from index").create("c");
 		Option groupId = OptionBuilder.withArgName("string").hasArg().withLongOpt("groupId").withDescription("limit to artifacts with this groupId").create("G");
 		Option artifactId = OptionBuilder.withArgName("string").hasArg().withLongOpt("artifactId").withDescription("limit to artifacts with this artifactId").create("A");
+		Option maxThreads = OptionBuilder.withArgName("int").hasArg().withLongOpt("maxThreads").withDescription("Maximum threads to allocate to the direct downloader").create("mt");
+		Option direct = new Option( "d", "skip resolve and download directly");
+		direct.setLongOpt("direct");
 		Option validate = new Option( "v", "validate local dependencies only");
 		validate.setLongOpt("validate");
 		Option list = new Option( "L", "print download summary and quit");
@@ -164,6 +176,8 @@ public class SynchroniserCli {
 		options.addOption(groupId);
 		options.addOption(artifactId);
 		options.addOption(validate);
+		options.addOption(direct);
+		options.addOption(maxThreads);
 		
 		return options;
 	}
