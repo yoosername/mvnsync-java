@@ -1,6 +1,8 @@
 package app.maven;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -179,8 +181,8 @@ public class Aether {
     		ArtifactInfo ai = deps.next();
 			try {
 				URL remoteBase = new URL(m.next().getUrl());
-				URL remote = new URL(remoteBase,"maven2/" + Helper.calculatePath(ai));
-				URL remoteChecksum = new URL(remoteBase,"maven2/" + Helper.calculatePath(ai) + ".sha1");
+				URL remote = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai)));
+				URL remoteChecksum = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai) + ".sha1"));
 	    		File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
 	    		Runnable worker = new DownloadWorker(local,remote,remoteChecksum);
 	            executor.execute(worker);
@@ -191,6 +193,28 @@ public class Aether {
     	while (!executor.isTerminated()) {}
         System.out.println("Finished all threads");
     	executor.shutdown();
+    }
+    
+    private URL followRedirect(URL url){
+    	int status = 0;
+    	boolean redirect = false;
+    	
+    	try {
+			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+			status = conn.getResponseCode();
+			if (status != HttpURLConnection.HTTP_OK) {
+				if (status == HttpURLConnection.HTTP_MOVED_TEMP
+					|| status == HttpURLConnection.HTTP_MOVED_PERM
+						|| status == HttpURLConnection.HTTP_SEE_OTHER)
+				redirect = true;
+			}
+			if(redirect == true){
+				String newUrl = conn.getHeaderField("Location");
+				return new URL(newUrl);
+			}
+		} catch (IOException e) {}
+    	
+    	return url;    	
     }
     
     public void resolve(IteratorResultSet deps){

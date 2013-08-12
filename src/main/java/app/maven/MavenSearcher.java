@@ -166,9 +166,11 @@ public class MavenSearcher {
 	        System.out.println("with artifactId: " + aether.getArtifactId());
 		}
 
+		final BooleanQuery typeQuery = new BooleanQuery();
 		for(String type: types){
-			query.add( indexer.constructQuery( MAVEN.PACKAGING, new SourcedSearchExpression( type ) ), Occur.MUST );
+			typeQuery.add( indexer.constructQuery( MAVEN.PACKAGING, new SourcedSearchExpression( type ) ), Occur.SHOULD );
 		}
+		query.add(typeQuery, Occur.MUST);
 		
 		IteratorSearchResponse response = indexer.searchIterator(new IteratorSearchRequest(query, context));
 	    	
@@ -201,7 +203,6 @@ public class MavenSearcher {
     }
 	
 	public void report(IteratorResultSet results) throws IOException {
-		System.out.println("Reporting on search of types: " + types);
 		int artifactsLocally = 0;
 		int artifactsRemote = 0;
 		File basedir = aether.getLocalRepository().getBasedir();
