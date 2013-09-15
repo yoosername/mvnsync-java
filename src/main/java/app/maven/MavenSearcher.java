@@ -2,7 +2,6 @@ package app.maven;
 
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
@@ -135,6 +134,12 @@ public class MavenSearcher {
 				while (sc.hasNextLine()) {
 					ArtifactInfo ai = Helper.buildArtifactInfo(sc.nextLine());
 					if(ai != null){
+						if(!aether.getGroupId().isEmpty() && (!ai.groupId.equals(aether.getGroupId()))){
+		        			continue;
+		        		}
+		        		if(!aether.getArtifactId().isEmpty() && (!ai.artifactId.equals(aether.getArtifactId()))){
+		        			continue;
+		        		}
 						results.add(ai);
 					}
 				}
@@ -165,7 +170,7 @@ public class MavenSearcher {
 	        query.add( artifactIdQ, Occur.MUST );
 	        System.out.println("with artifactId: " + aether.getArtifactId());
 		}
-
+		
 		final BooleanQuery typeQuery = new BooleanQuery();
 		for(String type: types){
 			typeQuery.add( indexer.constructQuery( MAVEN.PACKAGING, new SourcedSearchExpression( type ) ), Occur.SHOULD );
@@ -177,74 +182,62 @@ public class MavenSearcher {
         return response.getResults();
 	}
 	
-	public Set<ArtifactInfo> loadDependenciesFromFileSystem(){
-		System.out.println("Searching " + aether.getLocalRepository().getBasedir() + " for artifacts");
-		Set<ArtifactInfo> results = null;
-		loadDependenciesFromFileSystem(aether.getLocalRepository().getBasedir(),results);
-		return results;
-	}
-	
-    public void loadDependenciesFromFileSystem(File file,Set<ArtifactInfo> results){
-    	File basedir = aether.getLocalRepository().getBasedir();
+    public void summary(Iterator<ArtifactInfo> list) {
+    	int artifactsLocally = 0;
+		int artifactsRemote = 0;
+		File basedir = aether.getLocalRepository().getBasedir();
+
+		while(list.hasNext()){
+    		ArtifactInfo ai = list.next();
+    		if(ai != null){
+				artifactsRemote++;
+				File localFile = new File(basedir,Helper.calculatePath(ai));
+				if(localFile.exists()){
+					artifactsLocally++;
+				}
+    		}
+    	}
     	
-    	if(file.isFile()){
-    		ArtifactInfo ai = Helper.buildArtifactInfo(basedir,file);
-        	if(ai != null){
-        		 results.add(ai);
-        	}
-        }else if (file.isDirectory()) {
-          File[] listOfFiles = file.listFiles();
-          if(listOfFiles!=null) {
-            for(int i = 0; i < listOfFiles.length; i++){
-            	loadDependenciesFromFileSystem(listOfFiles[i],results);
-            }
-          }
-        }
-    }
-	
-	public void report(IteratorResultSet results) throws IOException {
+    	System.out.println("Remote: " + artifactsRemote);
+		System.out.println("Local: " + artifactsLocally);
+	}
+
+	public void summary(IteratorResultSet results) throws IOException {
 		int artifactsLocally = 0;
 		int artifactsRemote = 0;
 		File basedir = aether.getLocalRepository().getBasedir();
 
-        for ( ArtifactInfo ai : results )
-        {
-        	if(ai != null){
+		while(results.hasNext()){
+    		ArtifactInfo ai = results.next();
+    		if(ai != null){
 				artifactsRemote++;
-        		File localFile = new File(basedir,Helper.calculatePath(ai));
+				File localFile = new File(basedir,Helper.calculatePath(ai));
 				if(localFile.exists()){
 					artifactsLocally++;
 				}
-        	}
-        }
-		System.out.println("Remote: " + artifactsRemote);
+    		}
+    	}
+    	
+    	System.out.println("Remote: " + artifactsRemote);
 		System.out.println("Local: " + artifactsLocally);
 	}
-
-	public void createBatchFiles(IteratorResultSet results, int amount) throws IOException {
-		System.out.println("Creating " + amount + " batch files from indexed content");
-
-		File baseDir = aether.getLocalRepository().getBasedir();
-		File batchDir = new File(baseDir,".batches");
-		System.out.println("Writing " + amount + " GAVs in each batch file");
-		int added = 0;
-		int batched = 1;
-		FileWriter writer = new FileWriter(new File(batchDir,"batch_"+batched+".txt"));
-		
-		for(ArtifactInfo ai: results){
-			String gav = Helper.calculateGav(ai);
-			if(gav != null){
-				writer.append(gav + "\n");
-				if(++added >= amount){
-					writer.flush();
-				    writer.close();
-				    writer = new FileWriter(new File(batchDir,"batch_"+(++batched)+".txt"));
-					added = 0;
-				}
-			}
+	
+    public void print(Iterator<ArtifactInfo> list) {
+		while(list.hasNext()){
+    		ArtifactInfo ai = list.next();
+    		if(ai != null){
+    			System.out.println(Helper.calculateGav(ai));
+    		}
 		}
-		writer.flush();
-	    writer.close();
-		System.out.println("Created " + batched + " batch files in " + batchDir.getPath());
 	}
+    
+	public void print(IteratorResultSet results) {
+		while(results.hasNext()){
+    		ArtifactInfo ai = results.next();
+    		if(ai != null){
+    			System.out.println(Helper.calculateGav(ai));
+    		}
+		}
+	}
+
 }

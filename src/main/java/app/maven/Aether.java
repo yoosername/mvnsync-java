@@ -43,6 +43,7 @@ public class Aether {
 	private LocalRepository localRepository;
 	private List<RemoteRepository> mirrors = new ArrayList<RemoteRepository>();
 	private RemoteRepository remoteRepository;
+	private List<String> types = new ArrayList<String>();
 	private String groupId;
 	private String artifactId;
 	private int max;
@@ -63,6 +64,14 @@ public class Aether {
 		artifactId = "";		
 		newRepositorySystem();
 		newSession();	
+	}
+	
+	public void addType(String type){
+		this.types.add(type);
+	}
+	
+	public List<String> getTypes(){
+		return this.types;
 	}
 	
 	public RepositorySystem getRepositorySystem(){
@@ -169,7 +178,32 @@ public class Aether {
 		}
 		return collectRequest;
     }
-    
+ 
+	public void directDownload(Iterator<ArtifactInfo> it) {
+		ExecutorService executor = Executors.newFixedThreadPool(MAX_THREADS);
+    	mirrors.add(remoteRepository);
+    	RoundRobin<RemoteRepository> roundRobin = new RoundRobin<RemoteRepository>(mirrors);
+    	
+    	Iterator<RemoteRepository> m = roundRobin.iterator();
+        
+    	while(it.hasNext()){
+    		ArtifactInfo ai = it.next();
+			try {
+				URL remoteBase = new URL(m.next().getUrl());
+				URL remote = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai)));
+				URL remoteChecksum = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai) + ".sha1"));
+	    		File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
+	    		Runnable worker = new DownloadWorker(local,remote,remoteChecksum);
+	            executor.execute(worker);
+			} catch (MalformedURLException e) {
+				System.out.println("error creating remote url: " + e.getMessage());
+			}
+    	}
+    	while (!executor.isTerminated()) {}
+        System.out.println("Finished all threads");
+    	executor.shutdown();
+	}
+	
     public void directDownload(IteratorResultSet deps){
     	ExecutorService executor = Executors.newFixedThreadPool(MAX_THREADS);
     	mirrors.add(remoteRepository);
@@ -253,6 +287,7 @@ public class Aether {
 			for(int i=0;i<BATCH;i++){
 				ArtifactInfo ai = deps.next();
 	    		Artifact art = new DefaultArtifact(ai.groupId,ai.artifactId,ai.classifier,"jar",ai.version);
+
 	    		if(art!=null){
 	    			File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
 	        		if((method == Aether.RESOLVE)&&local.exists()){
@@ -290,5 +325,5 @@ public class Aether {
     		}
         }
     }
-  
+
 }

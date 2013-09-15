@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -23,6 +24,7 @@ import org.codehaus.plexus.component.repository.exception.ComponentLookupExcepti
 
 import app.maven.Aether;
 import app.maven.MavenSearcher;
+import app.maven.utils.FileSearch;
 
 public class SynchroniserCli {
 
@@ -44,6 +46,10 @@ public class SynchroniserCli {
 			dieWithUsage();
 		}
 		
+		if(cmd.hasOption("print") || cmd.hasOption("summary")){
+			required.remove(options.getOption("remoteRepository"));
+		}
+		
 		boolean missing = false;
 		
 		for( Option opt: required ){
@@ -58,7 +64,11 @@ public class SynchroniserCli {
 		}
 		
 		aether = new Aether(cmd.getOptionValue("localRepository"));
-		aether.setRemoteRepository(cmd.getOptionValue("remoteRepository"));
+		aether.setMethod(Aether.COLLECT); // default - dont get transitive deps
+		
+		if(cmd.hasOption("remoteRepository")){
+			aether.setRemoteRepository(cmd.getOptionValue("remoteRepository"));
+		}
 		
 		if(cmd.hasOption("groupId")){
 			aether.setGroupId(cmd.getOptionValue("groupId"));
@@ -84,58 +94,88 @@ public class SynchroniserCli {
 		if(cmd.hasOption("types")){
 			for(String type: cmd.getOptionValue("types").split("\\s*,\\s*")){
 				searcher.addType(type);
+				aether.addType(type);
 			}
 		}else{
 			searcher.addType("jar");
+			aether.addType("jar");
 		}
 		
 		if(cmd.hasOption("maxThreads")){
 			aether.setMaxThreads(Integer.parseInt(cmd.getOptionValue("maxThreads")));
 		}
 		
-		if(cmd.hasOption("list")){
-			searcher.setupIndexer();
-			searcher.report(searcher.loadDependenciesFromIndex());
-			searcher.closeIndex();
-		}else if(cmd.hasOption("validate")){
-			aether.setMethod(Aether.COLLECT);
-			Iterator<ArtifactInfo> deps = searcher.loadDependenciesFromFileSystem().iterator();
-			aether.resolve(deps);
-		}else if(cmd.hasOption("direct")){
-			aether.setMethod(Aether.DIRECT);
-			searcher.setupIndexer();
-			searcher.updateIndex();
-			IteratorResultSet results = searcher.loadDependenciesFromIndex();
-			aether.directDownload(results);
-			searcher.closeIndex();
-		}else if(cmd.hasOption("createBatchFiles")){
-			String val = cmd.getOptionValue("createBatchFiles");
-			if(val != null){
-				int num = Integer.parseInt(val);
-				if(num > 0){
+		if(cmd.hasOption("resolve")){
+			aether.setMethod(Aether.RESOLVE);
+		}
+		
+		if(cmd.hasOption("summary")){
+			if(cmd.hasOption("remoteRepository")){
+				// print summary of remote versus local
+				try{
 					searcher.setupIndexer();
-					searcher.updateIndex();
-					IteratorResultSet results = searcher.loadDependenciesFromIndex();
-					searcher.createBatchFiles(results,Integer.parseInt(cmd.getOptionValue("createBatchFiles")));
+					searcher.summary(searcher.loadDependenciesFromIndex());
 					searcher.closeIndex();
-				}else{
-					System.out.println("Must be a number greater than 0");
-					dieWithUsage();
+				}catch(Exception e){
+					System.out.println("Error creating remote summary: " + e.getMessage());
 				}
 			}else{
-				System.out.println("Missing argument: batch number");
-				dieWithUsage();
+				try{
+					FileSearch fs = new FileSearch(aether.getLocalRepository().getBasedir(),aether.getGroupId(),aether.getArtifactId());
+					Set<ArtifactInfo> results = fs.getResults();
+					searcher.summary(results.iterator());
+				}catch(Exception e){
+					System.out.println("Error creating local summary: " + e.getMessage());
+				}
+			}
+		}else if(cmd.hasOption("print")){
+			if(cmd.hasOption("remoteRepository")){
+				try{
+					searcher.setupIndexer();
+					searcher.print(searcher.loadDependenciesFromIndex());
+					searcher.closeIndex();
+				}catch(Exception e){
+					System.out.println("Error printing local artifacts: " + e.getMessage());
+				}
+			}else{
+				try{
+					FileSearch fs = new FileSearch(aether.getLocalRepository().getBasedir(),
+										aether.getGroupId(),aether.getArtifactId(),
+										aether.getTypes());
+					Set<ArtifactInfo> results = fs.getResults();
+					searcher.print(results.iterator());
+				}catch(Exception e){
+					System.out.println("Error printing remote artifacts: " + e.getMessage());
+				}
+			}
+		}else if(cmd.hasOption("validate")){
+			try{
+				FileSearch fs = new FileSearch(aether.getLocalRepository().getBasedir(),aether.getGroupId(),aether.getArtifactId());
+				Set<ArtifactInfo> results = fs.getResults();
+				aether.resolve(results.iterator());
+			}catch(Exception e){
+				System.out.println("Error validating local artifacts: " + e.getMessage());
 			}
 		}else if(cmd.hasOption("file")){
+			try{
+				aether.setMethod(Aether.DIRECT);
 				File file = new File(cmd.getOptionValue("file"));
 				Iterator<ArtifactInfo> it = searcher.loadDependenciesFromFile(file);
-				aether.resolve(it);
+				aether.directDownload(it);
+			}catch(Exception e){
+				System.out.println("Error downloading artifacts (from file): " + e.getMessage());
+			}
 		}else{
-			searcher.setupIndexer();
-			searcher.updateIndex();
-			IteratorResultSet it = searcher.loadDependenciesFromIndex();
-			aether.resolve(it);
-			searcher.closeIndex();
+			try{
+				aether.setMethod(Aether.DIRECT);
+				searcher.setupIndexer();
+				searcher.updateIndex();
+				IteratorResultSet results = searcher.loadDependenciesFromIndex();
+				aether.directDownload(results);
+				searcher.closeIndex();
+			}catch(Exception e){
+				System.out.println("Error downloading artifacts: " + e.getMessage());
+			}
 		}
 		System.out.println("Finished");
 	}
@@ -146,22 +186,22 @@ public class SynchroniserCli {
 		help.setLongOpt("help");
 		Option remoteRepo = OptionBuilder.withArgName("url").hasArg().withLongOpt("remoteRepository").withDescription("remote repository").create("r");
 		Option localRepo = OptionBuilder.withArgName("path").hasArg().withLongOpt("localRepository").withDescription("local repository").create("l");
-		required.add(remoteRepo);
 		required.add(localRepo);
 		Option max = OptionBuilder.withArgName("int").hasArg().withLongOpt("max").withDescription("maximum dependencies to resolve").create("M");
 		Option mirrors = OptionBuilder.withArgName("[mirror[,]]").hasArg().withLongOpt("mirrors").withDescription("comma seperated list of mirrors to use").create("m");
 		Option file = OptionBuilder.withArgName("path").hasArg().withLongOpt("file").withDescription("resolve GAV dependencies from this file").create("f");
 		Option types = OptionBuilder.withArgName("[type[,]]").hasArg().withLongOpt("types").withDescription("comma seperated list of types for index search").create("t");
-		Option createBatches = OptionBuilder.withArgName("int").hasArg().withLongOpt("createBatchFiles").withDescription("create specified amount of gav batch files from index").create("c");
 		Option groupId = OptionBuilder.withArgName("string").hasArg().withLongOpt("groupId").withDescription("limit to artifacts with this groupId").create("G");
 		Option artifactId = OptionBuilder.withArgName("string").hasArg().withLongOpt("artifactId").withDescription("limit to artifacts with this artifactId").create("A");
 		Option maxThreads = OptionBuilder.withArgName("int").hasArg().withLongOpt("maxThreads").withDescription("Maximum threads to allocate to the direct downloader").create("mt");
-		Option direct = new Option( "d", "skip resolve and download directly");
-		direct.setLongOpt("direct");
 		Option validate = new Option( "v", "validate local dependencies only");
 		validate.setLongOpt("validate");
-		Option list = new Option( "L", "print download summary and quit");
-		list.setLongOpt("list");
+		Option resolve = new Option( "rs", "resolve transitive dependencies");
+		resolve.setLongOpt("resolve");
+		Option summary = new Option( "s", "print summary and quit");
+		summary.setLongOpt("summary");
+		Option print = new Option( "p", "print artifact list and quit");
+		print.setLongOpt("print");
 		
 		Options options = new Options();
 		options.addOption(help);
@@ -171,12 +211,12 @@ public class SynchroniserCli {
 		options.addOption(mirrors);
 		options.addOption(file);
 		options.addOption(types);
-		options.addOption(list);
-		options.addOption(createBatches);
+		options.addOption(summary);
+		options.addOption(print);
 		options.addOption(groupId);
 		options.addOption(artifactId);
 		options.addOption(validate);
-		options.addOption(direct);
+		options.addOption(resolve);
 		options.addOption(maxThreads);
 		
 		return options;
