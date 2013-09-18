@@ -1,15 +1,10 @@
 package app.maven;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Scanner;
-import java.util.Set;
 
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
@@ -47,9 +42,14 @@ public class MavenSearcher {
 	private IndexingContext context;
 	private Aether aether;
 	private Indexer indexer;
+	private String remoteIndex = null;
 	
 	public void addType(String type){
 		this.types.add(type);
+	}
+	
+	public void setRemoteIndex(String remoteIndex){
+		this.remoteIndex = remoteIndex;
 	}
 	
 	public MavenSearcher(Aether aether){
@@ -70,10 +70,13 @@ public class MavenSearcher {
         indexers.add( plexusContainer.lookup( IndexCreator.class, "jarContent" ) );
         indexers.add( plexusContainer.lookup( IndexCreator.class, "maven-plugin" ) );
 
+        // remote index is either remoteRepository or user specified index
+        String rIndex = (String) ((remoteIndex!=null)?remoteIndex:aether.getRemoteRepository().getUrl().toString());
+        
         // Create context for repository index
         context = indexer.createIndexingContext( 
             "maven-context", "maven", mavenLocalCache, mavenIndexDir,
-            aether.getRemoteRepository().getUrl().toString(), null, true, true, indexers
+            rIndex, null, true, true, indexers
         );
 	}
 	
@@ -122,38 +125,6 @@ public class MavenSearcher {
 		} catch (IOException e) {}
 	}
 
-	public Iterator<ArtifactInfo> loadDependenciesFromFile(File file){
-		System.out.println("Resolving dependencies from file: " + file.getPath());
-		Set<ArtifactInfo> results = new HashSet<ArtifactInfo>();
-		Scanner sc = null;
-		File depFile = file;
-		
-		if(depFile.exists() && depFile.isFile()){
-			try {
-				sc = new Scanner(depFile);
-				while (sc.hasNextLine()) {
-					ArtifactInfo ai = Helper.buildArtifactInfo(sc.nextLine());
-					if(ai != null){
-						if(!aether.getGroupId().isEmpty() && (!ai.groupId.equals(aether.getGroupId()))){
-		        			continue;
-		        		}
-		        		if(!aether.getArtifactId().isEmpty() && (!ai.artifactId.equals(aether.getArtifactId()))){
-		        			continue;
-		        		}
-						results.add(ai);
-					}
-				}
-			} catch (FileNotFoundException e) {
-				System.out.println("GAV file not found: " + e.getMessage());
-			} finally{
-				sc.close();
-				System.out.println("file closed");
-			}
-		}
-		Iterator<ArtifactInfo> it = results.iterator();
-		return it;
-	}
-	
 	public IteratorResultSet loadDependenciesFromIndex() throws IOException{
 		System.out.println("Searching index for artifacts of type(s): " + types);
 		
@@ -182,26 +153,6 @@ public class MavenSearcher {
         return response.getResults();
 	}
 	
-    public void summary(Iterator<ArtifactInfo> list) {
-    	int artifactsLocally = 0;
-		int artifactsRemote = 0;
-		File basedir = aether.getLocalRepository().getBasedir();
-
-		while(list.hasNext()){
-    		ArtifactInfo ai = list.next();
-    		if(ai != null){
-				artifactsRemote++;
-				File localFile = new File(basedir,Helper.calculatePath(ai));
-				if(localFile.exists()){
-					artifactsLocally++;
-				}
-    		}
-    	}
-    	
-    	System.out.println("Remote: " + artifactsRemote);
-		System.out.println("Local: " + artifactsLocally);
-	}
-
 	public void summary(IteratorResultSet results) throws IOException {
 		int artifactsLocally = 0;
 		int artifactsRemote = 0;
@@ -222,16 +173,7 @@ public class MavenSearcher {
 		System.out.println("Local: " + artifactsLocally);
 	}
 	
-    public void print(Iterator<ArtifactInfo> list) {
-		while(list.hasNext()){
-    		ArtifactInfo ai = list.next();
-    		if(ai != null){
-    			System.out.println(Helper.calculateGav(ai));
-    		}
-		}
-	}
-    
-	public void print(IteratorResultSet results) {
+ 	public void print(IteratorResultSet results) {
 		while(results.hasNext()){
     		ArtifactInfo ai = results.next();
     		if(ai != null){

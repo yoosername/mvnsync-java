@@ -17,18 +17,11 @@ import org.apache.maven.repository.internal.MavenRepositorySystemUtils;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.artifact.DefaultArtifact;
-import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.collection.DependencyCollectionException;
 import org.eclipse.aether.connector.wagon.WagonProvider;
 import org.eclipse.aether.connector.wagon.WagonRepositoryConnectorFactory;
-import org.eclipse.aether.graph.Dependency;
 import org.eclipse.aether.impl.DefaultServiceLocator;
 import org.eclipse.aether.repository.LocalRepository;
 import org.eclipse.aether.repository.RemoteRepository;
-import org.eclipse.aether.resolution.DependencyRequest;
-import org.eclipse.aether.resolution.DependencyResolutionException;
 import org.eclipse.aether.spi.connector.RepositoryConnectorFactory;
 
 import app.maven.listeners.ConsoleRepositoryListener;
@@ -49,14 +42,7 @@ public class Aether {
 	private int max;
 	private boolean hasMax = false;
 	private int MAX_THREADS = 16;
-	
-	private int BATCH = 50; //50 = best tested download rate out of 15,24,48,50,100
-	
-	public static final int COLLECT = 0;
-	public static final int RESOLVE = 1;
-	public static final int DIRECT = 2;
-	
-	private int method = RESOLVE;
+	private boolean skipExisting = false;
 	
 	public Aether(String local){
 		setLocalRepository(local);
@@ -64,6 +50,10 @@ public class Aether {
 		artifactId = "";		
 		newRepositorySystem();
 		newSession();	
+	}
+	
+	public void setSkipExisting(boolean choice){
+		this.skipExisting = choice;
 	}
 	
 	public void addType(String type){
@@ -80,10 +70,6 @@ public class Aether {
 	
 	public RepositorySystemSession getRepositorySession(){
 		return session;
-	}
-	
-	public void setMethod(int method){
-		this.method = method;
 	}
 	
 	public String getGroupId(){
@@ -147,7 +133,6 @@ public class Aether {
 	public void setMax(int max) {
 		this.max = max;
 		this.hasMax = true;
-		this.BATCH = max;
 	}
 	
 	public void setMaxThreads(int max){
@@ -169,65 +154,37 @@ public class Aether {
         session.setRepositoryListener(new ConsoleRepositoryListener());
         this.session = session;
     }
-
-    public CollectRequest aetherCollectRequest(){
-    	CollectRequest collectRequest = new CollectRequest();
-		collectRequest.addRepository(remoteRepository);
-		for(RemoteRepository mirror: mirrors){
-			collectRequest.addRepository( mirror );
-		}
-		return collectRequest;
-    }
  
-	public void directDownload(Iterator<ArtifactInfo> it) {
+	public void directDownload(IteratorResultSet deps){
+		System.out.println("Starting artifact download(s)" + ((skipExisting?" - skipping existing":"")));
 		ExecutorService executor = Executors.newFixedThreadPool(MAX_THREADS);
-    	mirrors.add(remoteRepository);
-    	RoundRobin<RemoteRepository> roundRobin = new RoundRobin<RemoteRepository>(mirrors);
-    	
-    	Iterator<RemoteRepository> m = roundRobin.iterator();
-        
-    	while(it.hasNext()){
-    		ArtifactInfo ai = it.next();
-			try {
-				URL remoteBase = new URL(m.next().getUrl());
-				URL remote = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai)));
-				URL remoteChecksum = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai) + ".sha1"));
-	    		File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
-	    		Runnable worker = new DownloadWorker(local,remote,remoteChecksum);
-	            executor.execute(worker);
-			} catch (MalformedURLException e) {
-				System.out.println("error creating remote url: " + e.getMessage());
+		mirrors.add(remoteRepository);
+		RoundRobin<RemoteRepository> roundRobin = new RoundRobin<RemoteRepository>(mirrors);
+
+		Iterator<RemoteRepository> m = roundRobin.iterator();
+
+		while(deps.hasNext()){
+			ArtifactInfo ai = deps.next();
+			File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
+			
+			if(skipExisting==true){
+				if(local.exists()){
+					continue;
+				}
+				try {
+					URL remoteBase = new URL(m.next().getUrl());
+					URL remote = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai)));
+					Runnable worker = new DownloadWorker(local,remote);
+					executor.execute(worker);
+				} catch (MalformedURLException e) {
+					System.out.println("error creating remote url: " + e.getMessage());
+				}
 			}
-    	}
-    	while (!executor.isTerminated()) {}
-        System.out.println("Finished all threads");
-    	executor.shutdown();
+		}
+		while (!executor.isTerminated()) {}
+		System.out.println("Finished all threads");
+		executor.shutdown();
 	}
-	
-    public void directDownload(IteratorResultSet deps){
-    	ExecutorService executor = Executors.newFixedThreadPool(MAX_THREADS);
-    	mirrors.add(remoteRepository);
-    	RoundRobin<RemoteRepository> roundRobin = new RoundRobin<RemoteRepository>(mirrors);
-    	
-    	Iterator<RemoteRepository> m = roundRobin.iterator();
-        
-    	while(deps.hasNext()){
-    		ArtifactInfo ai = deps.next();
-			try {
-				URL remoteBase = new URL(m.next().getUrl());
-				URL remote = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai)));
-				URL remoteChecksum = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai) + ".sha1"));
-	    		File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
-	    		Runnable worker = new DownloadWorker(local,remote,remoteChecksum);
-	            executor.execute(worker);
-			} catch (MalformedURLException e) {
-				System.out.println("error creating remote url: " + e.getMessage());
-			}
-    	}
-    	while (!executor.isTerminated()) {}
-        System.out.println("Finished all threads");
-    	executor.shutdown();
-    }
     
     private URL followRedirect(URL url){
     	int status = 0;
@@ -251,79 +208,4 @@ public class Aether {
     	return url;    	
     }
     
-    public void resolve(IteratorResultSet deps){
-    	CollectRequest collectRequest;
-    	int total = 0;
-		
-		while(deps.hasNext()){
-			collectRequest = aetherCollectRequest();
-			for(int i=0;i<BATCH;i++){
-				ArtifactInfo ai = deps.next();
-	    		Artifact art = new DefaultArtifact(ai.groupId,ai.artifactId,ai.classifier,"jar",ai.version);
-	        	if(art!=null){
-	        		File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
-	        		if((method == Aether.RESOLVE)&&local.exists()){
-	        			continue;
-	        		}
-        			Dependency dep = new Dependency(art,"compile");
-        			collectRequest.addDependency(dep);
-        			total++;
-	        	}
-			}
-	        DependencyRequest dependencyRequest = new DependencyRequest( collectRequest, null );
-	        request(dependencyRequest);
-	        if(hasMax && total >= max){
-        		return;
-        	}
-		}
-	}
-    
-    public void resolve(Iterator<ArtifactInfo> deps){
-    	CollectRequest collectRequest;
-    	int total = 0;
-    	
-		while(deps.hasNext()){
-			collectRequest = aetherCollectRequest();
-			for(int i=0;i<BATCH;i++){
-				ArtifactInfo ai = deps.next();
-	    		Artifact art = new DefaultArtifact(ai.groupId,ai.artifactId,ai.classifier,"jar",ai.version);
-
-	    		if(art!=null){
-	    			File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
-	        		if((method == Aether.RESOLVE)&&local.exists()){
-	        			continue;
-	        		}
-        			Dependency dep = new Dependency(art,"compile");
-        			collectRequest.addDependency(dep);
-        			total++;
-	    		}
-			}
-	        DependencyRequest dependencyRequest = new DependencyRequest( collectRequest, null );
-	        request(dependencyRequest);
-	        if(hasMax && total >= max){
-        		return;
-        	}
-		}
-	}
-    
-    private void request(DependencyRequest request){
-    	if(method == Aether.RESOLVE){
-    		//DependencyNode node = system.collectDependencies(session, collectRequest).getRoot();
-        	//DependencyRequest dependencyRequest = new DependencyRequest( node, null );
-            try {
-            	System.out.println("Attempting to resolve "+BATCH+" dependencies: ");
-    			system.resolveDependencies( session, request  );
-    		} catch (DependencyResolutionException e) {
-    			System.out.println("problem resolving dependencies: " + e.getMessage());
-    		}
-        }else{
-        	try {
-        		System.out.println("Attempting to collect "+BATCH+" dependencies: ");
-        		system.collectDependencies(session, request.getCollectRequest());
-    		} catch (DependencyCollectionException e) {
-    			System.out.println("problem collecting dependencies: " + e.getMessage());
-    		}
-        }
-    }
-
 }
