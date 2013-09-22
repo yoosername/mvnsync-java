@@ -203,7 +203,6 @@ public class Helper {
 
 	static String getExtension(String fileName) {
 		List<String> EXTS = Arrays.asList("jar","war","pom","tar.gz", "zip");
-		System.out.println("filename: "+fileName);
 		for (String ext : EXTS) {
 		   if (fileName.endsWith("." + ext)) {
 		     return ext;
@@ -277,5 +276,23 @@ public class Helper {
         {
             return null;
         }
+	}
+
+	public static String calculatePom(ArtifactInfo ai) {
+		StringBuilder path = new StringBuilder( 128 );
+		path.append( ai.groupId.replace( '.', '/' ) ).append( '/' );
+		path.append( ai.artifactId ).append( '/' );
+		path.append( ai.version ).append( '/' );
+		path.append( ai.artifactId ).append( '-' ).append( ai.version );
+		path.append( ".pom" );
+		return path.toString();
+	}
+	
+	public static ArtifactInfo buildPom(ArtifactInfo ai) {
+		ai.classifier = "";
+		ai.fextension = "pom";
+		ai.fname = ai.fname.substring(0, ai.fname.lastIndexOf(".")) + ".pom";
+		ai.packaging = "pom";
+		return ai;
 	}
 }

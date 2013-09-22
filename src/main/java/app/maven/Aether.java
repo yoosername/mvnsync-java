@@ -1,8 +1,5 @@
 package app.maven;
 
-import java.io.File;
-import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -26,7 +23,6 @@ import org.eclipse.aether.spi.connector.RepositoryConnectorFactory;
 
 import app.maven.listeners.ConsoleRepositoryListener;
 import app.maven.providers.ManualWagonProvider;
-import app.maven.utils.Helper;
 import app.maven.workers.DownloadWorker;
 
 public class Aether {
@@ -121,6 +117,10 @@ public class Aether {
 		} catch (MalformedURLException e) {}
 		mirrors.add(new RemoteRepository.Builder( name, "default", mirror ).build());
 	}
+	
+	public List<RemoteRepository> getMirrors(){
+		return mirrors;
+	}
 
 	public boolean hasMax(){
 		return hasMax;
@@ -137,6 +137,10 @@ public class Aether {
 	
 	public void setMaxThreads(int max){
 		this.MAX_THREADS = max;
+	}
+	
+	public int getMaxThreads(){
+		return MAX_THREADS;
 	}
 	
 	public void newRepositorySystem()
@@ -156,56 +160,18 @@ public class Aether {
     }
  
 	public void directDownload(IteratorResultSet deps){
-		System.out.println("Starting artifact download(s)" + ((skipExisting?" - skipping existing":"")));
 		ExecutorService executor = Executors.newFixedThreadPool(MAX_THREADS);
-		mirrors.add(remoteRepository);
 		RoundRobin<RemoteRepository> roundRobin = new RoundRobin<RemoteRepository>(mirrors);
-
 		Iterator<RemoteRepository> m = roundRobin.iterator();
 
 		while(deps.hasNext()){
 			ArtifactInfo ai = deps.next();
-			File local = new File(localRepository.getBasedir(),Helper.calculatePath(ai));
-			
-			if(skipExisting==true){
-				if(local.exists()){
-					continue;
-				}
-				try {
-					URL remoteBase = new URL(m.next().getUrl());
-					URL remote = followRedirect(new URL(remoteBase.toString() + "/" + Helper.calculatePath(ai)));
-					Runnable worker = new DownloadWorker(local,remote);
-					executor.execute(worker);
-				} catch (MalformedURLException e) {
-					System.out.println("error creating remote url: " + e.getMessage());
-				}
-			}
+			Runnable worker = new DownloadWorker(localRepository,m.next(),ai,skipExisting);
+			executor.execute(worker);
 		}
 		while (!executor.isTerminated()) {}
 		System.out.println("Finished all threads");
 		executor.shutdown();
 	}
-    
-    private URL followRedirect(URL url){
-    	int status = 0;
-    	boolean redirect = false;
-    	
-    	try {
-			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-			status = conn.getResponseCode();
-			if (status != HttpURLConnection.HTTP_OK) {
-				if (status == HttpURLConnection.HTTP_MOVED_TEMP
-					|| status == HttpURLConnection.HTTP_MOVED_PERM
-						|| status == HttpURLConnection.HTTP_SEE_OTHER)
-				redirect = true;
-			}
-			if(redirect == true){
-				String newUrl = conn.getHeaderField("Location");
-				return new URL(newUrl);
-			}
-		} catch (IOException e) {}
-    	
-    	return url;    	
-    }
-    
+   
 }

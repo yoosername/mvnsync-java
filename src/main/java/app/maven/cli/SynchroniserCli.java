@@ -4,7 +4,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -18,10 +21,12 @@ import org.apache.maven.index.IteratorResultSet;
 import org.apache.maven.index.context.ExistingLuceneIndexMismatchException;
 import org.codehaus.plexus.PlexusContainerException;
 import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
+import org.eclipse.aether.repository.RemoteRepository;
 
 import app.maven.Aether;
 import app.maven.MavenSearcher;
-import app.maven.utils.Finder;
+import app.maven.RoundRobin;
+import app.maven.utils.VerifyPomFinder;
 
 public class SynchroniserCli {
 
@@ -34,6 +39,7 @@ public class SynchroniserCli {
 		options = buildOptions();
 		cmd = parseOptions(options,args);
 		
+		// Validate CLI args
 		if(cmd == null){
 			System.out.println("Error parsing cmdline args");
 			System.exit(1);
@@ -60,6 +66,7 @@ public class SynchroniserCli {
 			dieWithUsage();
 		}
 		
+		// Setup new Aether (downloader)
 		aether = new Aether(cmd.getOptionValue("localRepository"));
 				
 		if(cmd.hasOption("skipExisting")){
@@ -68,6 +75,7 @@ public class SynchroniserCli {
 		
 		if(cmd.hasOption("remoteRepository")){
 			aether.setRemoteRepository(cmd.getOptionValue("remoteRepository"));
+			aether.addMirror(cmd.getOptionValue("remoteRepository"));
 		}
 		
 		if(cmd.hasOption("groupId")){
@@ -88,7 +96,8 @@ public class SynchroniserCli {
 				aether.addMirror(mirror);
 			}
 		}		
-				
+		
+		// Setup new MavenSearcher (lucene index)
 		MavenSearcher searcher = new MavenSearcher(aether);
 		
 		if(cmd.hasOption("index")){
@@ -109,10 +118,16 @@ public class SynchroniserCli {
 			aether.setMaxThreads(Integer.parseInt(cmd.getOptionValue("maxThreads")));
 		}
 		
-		if(cmd.hasOption("fix")){
-			Finder finder = new Finder(cmd.getOptionValue("fix"));
+		// Main
+		if(cmd.hasOption("fixMissingPoms")){
+			ExecutorService executor = Executors.newFixedThreadPool(aether.getMaxThreads());
+			RoundRobin<RemoteRepository> roundRobin = new RoundRobin<RemoteRepository>(aether.getMirrors());
+			Iterator<RemoteRepository> m = roundRobin.iterator();
+			VerifyPomFinder finder = new VerifyPomFinder(aether.getLocalRepository(),executor,m); //every jar should have at least one parent pom
 	        Files.walkFileTree(aether.getLocalRepository().getBasedir().toPath(), finder);
-	        finder.done();
+	        executor.shutdown();
+	        while (!executor.isTerminated()) {}
+			finder.done();
 		}else if(cmd.hasOption("summary")){
 			if(cmd.hasOption("remoteRepository") || cmd.hasOption("index")){
 				// print summary of remote versus local
@@ -128,6 +143,7 @@ public class SynchroniserCli {
 			}
 		}else if(cmd.hasOption("print")){
 			if(cmd.hasOption("remoteRepository") || cmd.hasOption("index")){
+				// print lucene search results to the console
 				try{
 					searcher.setupIndexer();
 					searcher.print(searcher.loadDependenciesFromIndex());
@@ -140,6 +156,7 @@ public class SynchroniserCli {
 			}
 		}else{
 			try{
+				// download lucene search results using download workers
 				searcher.setupIndexer();
 				searcher.updateIndex();
 				IteratorResultSet results = searcher.loadDependenciesFromIndex();
@@ -166,14 +183,13 @@ public class SynchroniserCli {
 		Option artifactId = OptionBuilder.withArgName("string").hasArg().withLongOpt("artifactId").withDescription("limit to artifacts with this artifactId").create("A");
 		Option maxThreads = OptionBuilder.withArgName("int").hasArg().withLongOpt("maxThreads").withDescription("Maximum threads to allocate to the direct downloader").create("mt");
 		Option index = OptionBuilder.withArgName("url").hasArg().withLongOpt("index").withDescription("Alternative lucene index to search").create("i");
-		Option fix = OptionBuilder.withArgName("glob matcher").hasArg().withLongOpt("fix").withDescription("verify local checksums").create("fix");
+		Option fixMissingPoms = OptionBuilder.withLongOpt("fixMissingPoms").withDescription("verify and download missing poms in local repo").create("fmp");
 		Option summary = new Option( "s", "print summary and quit");
 		summary.setLongOpt("summary");
 		Option print = new Option( "p", "print artifact list and quit");
 		print.setLongOpt("print");
 		Option skipExisting = new Option( "se", "skip existing file(s)");
 		skipExisting.setLongOpt("skipExisting");
-		fix.setLongOpt("fix");
 		
 		Options options = new Options();
 		options.addOption(help);
@@ -189,7 +205,7 @@ public class SynchroniserCli {
 		options.addOption(maxThreads);
 		options.addOption(index);
 		options.addOption(skipExisting);
-		options.addOption(fix);
+		options.addOption(fixMissingPoms);
 		
 		return options;
 	}

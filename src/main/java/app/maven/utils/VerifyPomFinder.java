@@ -10,20 +10,29 @@ import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Arrays;
-import java.util.Map;
-import java.util.Map.Entry;
+import java.util.Iterator;
+import java.util.concurrent.ExecutorService;
 
-import org.eclipse.aether.util.ChecksumUtils;
+import org.apache.maven.index.ArtifactInfo;
+import org.eclipse.aether.repository.LocalRepository;
+import org.eclipse.aether.repository.RemoteRepository;
 
-public class Finder extends SimpleFileVisitor<Path> {
+import app.maven.workers.DownloadWorker;
+
+public class VerifyPomFinder extends SimpleFileVisitor<Path> {
 
 	private final PathMatcher matcher;
 	private int numMatches = 0;
 	private int numFailed = 0;
+	private LocalRepository localRepository;
+	private ExecutorService es;
+	private Iterator<RemoteRepository> m;
 
-	public Finder(String pattern) {
-		matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+	public VerifyPomFinder(LocalRepository localRepository, ExecutorService executor, Iterator<RemoteRepository> m) {
+		this.localRepository = localRepository;
+		this.es = executor;
+		this.m = m;
+		matcher = FileSystems.getDefault().getPathMatcher("glob:*.jar");
 	}
 
 	// Compares the glob pattern against the file or directory name.
@@ -31,18 +40,24 @@ public class Finder extends SimpleFileVisitor<Path> {
 		// Check if SHA1 and then verify the file
 		Path name = file.getFileName();
 		if (name != null && matcher.matches(name)) {
-			if(!validChecksum(file.toFile())){
-				System.out.println("Checksum verify failed: " + file);
-				numFailed++;
+			ArtifactInfo ai = Helper.buildArtifactInfo(localRepository.getBasedir(), file.toFile());
+			if(ai != null){
+				File pom = new File(localRepository.getBasedir(),Helper.calculatePom(ai));
+				if(!pom.exists()){
+					System.out.println("Missing pom: " + pom);
+					Runnable worker = new DownloadWorker(localRepository,m.next(),Helper.buildPom(ai),true);
+					es.execute(worker);
+					numFailed++;
+				}
+				numMatches++;
 			}
-			numMatches++;
 		}
 	}
 
 	// Prints the total number of matches to standard out.
 	public void done() {
-		System.out.println("Verified " + numMatches);
-		System.out.println("Failed " + numFailed);
+		System.out.println("Found " + numMatches);
+		System.out.println("Tried to resolve " + numFailed);
 	}
 
 	// Invoke the pattern matching method on each file.
@@ -64,23 +79,5 @@ public class Finder extends SimpleFileVisitor<Path> {
 		System.err.println(exc);
 		return CONTINUE;
 	}
-	
-	private boolean validChecksum(File local) {
-		Map<String, Object> checksums = null;
-		File sha1 = new File(local + ".sha1");
-		
-    	try {
-			checksums = ChecksumUtils.calc( local, Arrays.asList( "SHA-1" ) );
-			for ( Entry<String, Object> entry : checksums.entrySet() )
-	        {
-	            String actual = entry.getValue().toString();
-	            String expected = ChecksumUtils.read( sha1 );
-	            if(actual.equals(expected)){
-	            	return true;
-	            }
-	        }
-		} catch (IOException e) {}
-    	
-    	return false;
-	}
+
 }
